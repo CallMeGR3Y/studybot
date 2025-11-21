@@ -25,6 +25,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 INTENT_KEYWORDS = [
     "study",
     "studying",
+    "study together",
     "study group",
     "review",
     "go over",

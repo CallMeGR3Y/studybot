@@ -1,9 +1,10 @@
 import re
+import os
+from datetime import datetime, timedelta
+
 import discord
 from discord.ext import commands
 import dateparser
-from datetime import datetime
-import os
 
 # ==============================
 # CONFIG
@@ -11,13 +12,14 @@ import os
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-GENERAL_CHANNEL_ID = 1437668461471072328   # replace with your general discussion channel ID
-STUDY_CHANNEL_ID = 1441197907737837590     # replace with your study-planning channel ID
+# Use your actual channel IDs here
+GENERAL_CHANNEL_ID = 1437668461471072328  # #general-discussion
+STUDY_CHANNEL_ID = 1441197907737837590    # #study-group-planning
 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
 
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ==============================
 # SMARTER MESSAGE DETECTION
@@ -66,25 +68,67 @@ SCHEDULE_KEYWORDS = [
     "sunday",
 ]
 
+# Matches times like: 4pm, 4 pm, 4:00, 16:00, 7:30pm, etc
 TIME_PATTERN = r"\b(\d{1,2}(:\d{2})?\s?(am|pm)|\d{1,2}:\d{2})\b"
 
 
 def parse_when(text: str):
     """
-    Convert natural language into a datetime.
-    Example: "study tomorrow at 4 pm"
+    Try to pull a date and time out of the message text.
+
+    Examples:
+      "we should study together tomorrow at 4 PM"
+      "let's review saturday at 6"
+      "we should study together at 4 PM"
+
+    Returns:
+      datetime or None
     """
-    return dateparser.parse(
+    # First, let dateparser try on the full text
+    parsed = dateparser.parse(
         text,
         settings={
             "PREFER_DATES_FROM": "future",
             "TIMEZONE": "America/New_York",
-            "RETURN_AS_TIMEZONE_AWARE": True,
+            "RETURN_AS_TIMEZONE_AWARE": False,  # keep it simple
         },
     )
+    if parsed is not None:
+        return parsed
+
+    # If that failed but there is a time, assume "next occurrence of that time"
+    lowered = text.lower()
+    m = re.search(TIME_PATTERN, lowered)
+    if not m:
+        return None
+
+    time_part = m.group(0)
+    time_only = dateparser.parse(time_part)
+    if time_only is None:
+        return None
+
+    now = datetime.now()
+    dt = now.replace(
+        hour=time_only.hour,
+        minute=time_only.minute,
+        second=0,
+        microsecond=0,
+    )
+    # If that time already passed today, move to tomorrow
+    if dt <= now:
+        dt = dt + timedelta(days=1)
+
+    return dt
 
 
 def looks_like_study_session(text: str) -> bool:
+    """
+    Smart detection:
+    - Must have at least one intent keyword (study, review, meet up, etc)
+    - Must also have:
+        - a time (4pm, 18:00, 7:30pm, etc) OR
+        - a schedule keyword (tomorrow, saturday, after class, etc)
+    """
     lowered = text.lower()
 
     has_intent = any(kw in lowered for kw in INTENT_KEYWORDS)
@@ -108,6 +152,7 @@ class ConfirmStudyView(discord.ui.View):
 
     @discord.ui.button(label="Yes", style=discord.ButtonStyle.success)
     async def yes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Only the original author can confirm
         if interaction.user.id != self.original_message.author.id:
             await interaction.response.send_message(
                 "Only the person who wrote the message can confirm this.",
@@ -122,22 +167,22 @@ class ConfirmStudyView(discord.ui.View):
 
         study_channel = interaction.client.get_channel(STUDY_CHANNEL_ID)
         if study_channel is None:
-            await interaction.followup.send("I could not find the study group channel.", ephemeral=True)
+            await interaction.followup.send(
+                "I could not find the study group channel.",
+                ephemeral=True
+            )
             return
 
         author = self.original_message.author
         content = self.original_message.content
 
-        # Parse date/time
         when_dt = parse_when(content)
         when_line = ""
-
         if when_dt is not None:
-            # Format the detected date
-            when_str = when_dt.strftime("%A, %B %d, %Y at %-I:%M %p")
+            # Example: Friday, November 21, 2025 at 04:00 PM (ET)
+            when_str = when_dt.strftime("%A, %B %d, %Y at %I:%M %p")
             when_line = f"**When:** {when_str} (ET)\n"
 
-        # Send session message
         session_message = await study_channel.send(
             f"📚 **Proposed Study Session**\n"
             f"**From:** {author.mention}\n"
@@ -151,14 +196,15 @@ class ConfirmStudyView(discord.ui.View):
         await session_message.add_reaction("❓")
         await session_message.add_reaction("❌")
 
-        # Disable buttons
+        # Disable buttons after use
         for child in self.children:
-            child.disabled = True
-
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
         await interaction.message.edit(view=self)
 
     @discord.ui.button(label="No", style=discord.ButtonStyle.danger)
     async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Only the original author can cancel
         if interaction.user.id != self.original_message.author.id:
             await interaction.response.send_message(
                 "Only the person who wrote the message can respond.",
@@ -166,11 +212,14 @@ class ConfirmStudyView(discord.ui.View):
             )
             return
 
-        await interaction.response.send_message("No problem. I will ignore that message.", ephemeral=True)
+        await interaction.response.send_message(
+            "No problem. I will ignore that message.",
+            ephemeral=True
+        )
 
         for child in self.children:
-            child.disabled = True
-
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
         await interaction.message.edit(view=self)
 
 
@@ -186,14 +235,18 @@ async def on_ready():
 
 @bot.event
 async def on_message(message: discord.Message):
+    # Keep commands working
     await bot.process_commands(message)
 
+    # Ignore other bots
     if message.author.bot:
         return
 
+    # Only watch the general discussion channel
     if message.channel.id != GENERAL_CHANNEL_ID:
         return
 
+    # Detect study session intent
     if looks_like_study_session(message.content):
         view = ConfirmStudyView(message)
         await message.reply(

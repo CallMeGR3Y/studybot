@@ -1,6 +1,8 @@
 import re
 import discord
 from discord.ext import commands
+import dateparser
+from datetime import datetime
 
 # ==============================
 # CONFIG
@@ -67,6 +69,23 @@ SCHEDULE_KEYWORDS = [
 
 TIME_PATTERN = r"\b(\d{1,2}(:\d{2})?\s?(am|pm)|\d{1,2}:\d{2})\b"
 
+def parse_when(text: str):
+    """
+    Try to pull a date and time out of the message text.
+    Example inputs:
+      "we should study tomorrow at 4 PM"
+      "let's review Saturday at 6"
+    Returns a datetime or None.
+    """
+    parsed = dateparser.parse(
+        text,
+        settings={
+            "PREFER_DATES_FROM": "future",
+            "TIMEZONE": "America/New_York",
+            "RETURN_AS_TIMEZONE_AWARE": True,
+        },
+    )
+    return parsed
 
 def looks_like_study_session(text: str) -> bool:
     """
@@ -120,12 +139,20 @@ class ConfirmStudyView(discord.ui.View):
         author = self.original_message.author
         content = self.original_message.content
 
+        when_dt = parse_when(content)
+        when_line = ""
+        if when_dt is not None:
+         # Format like: Friday, November 21, 2025 at 4:00 PM (ET)
+        when_str = when_dt.strftime("%A, %B %d, %Y at %-I:%M %p")
+        when_line = f"**When:** {when_str} (ET)\n"
+
         session_message = await study_channel.send(
-            f"📚 **Proposed Study Session**\n"
-            f"**From:** {author.mention}\n"
-            f"**Details:** {content}\n\n"
-            f"React below to RSVP:\n"
-            f"✅ Going   ❓ Maybe   ❌ Not going"
+        f"📚 **Proposed Study Session**\n"
+        f"**From:** {author.mention}\n"
+        f"**Details (original):** {content}\n"
+        f"{when_line}\n"
+        f"React below to RSVP:\n"
+        f"✅ Going   ❓ Maybe   ❌ Not going"
         )
 
         await session_message.add_reaction("✅")

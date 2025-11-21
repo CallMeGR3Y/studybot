@@ -3,20 +3,19 @@ import discord
 from discord.ext import commands
 import dateparser
 from datetime import datetime
+import os
 
 # ==============================
 # CONFIG
 # ==============================
 
-import os
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-GENERAL_CHANNEL_ID = 1437668461471072328  # replace with #general-discussion ID
-STUDY_CHANNEL_ID = 1441197907737837590    # replace with #study-group-planning ID
+GENERAL_CHANNEL_ID = 1437668461471072328   # replace with your general discussion channel ID
+STUDY_CHANNEL_ID = 1441197907737837590     # replace with your study-planning channel ID
 
 intents = discord.Intents.default()
 intents.message_content = True
-
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
@@ -69,15 +68,13 @@ SCHEDULE_KEYWORDS = [
 
 TIME_PATTERN = r"\b(\d{1,2}(:\d{2})?\s?(am|pm)|\d{1,2}:\d{2})\b"
 
+
 def parse_when(text: str):
     """
-    Try to pull a date and time out of the message text.
-    Example inputs:
-      "we should study tomorrow at 4 PM"
-      "let's review Saturday at 6"
-    Returns a datetime or None.
+    Convert natural language into a datetime.
+    Example: "study tomorrow at 4 pm"
     """
-    parsed = dateparser.parse(
+    return dateparser.parse(
         text,
         settings={
             "PREFER_DATES_FROM": "future",
@@ -85,17 +82,9 @@ def parse_when(text: str):
             "RETURN_AS_TIMEZONE_AWARE": True,
         },
     )
-    return parsed
+
 
 def looks_like_study_session(text: str) -> bool:
-    """
-    Smart detection:
-    - Must have at least one intent keyword (study, review, meet up, etc)
-    - Must also have:
-        - a time (4pm, 18:00, 7:30pm, etc) OR
-        - a schedule keyword (tomorrow, saturday, after class, etc)
-    """
-
     lowered = text.lower()
 
     has_intent = any(kw in lowered for kw in INTENT_KEYWORDS)
@@ -139,28 +128,33 @@ class ConfirmStudyView(discord.ui.View):
         author = self.original_message.author
         content = self.original_message.content
 
+        # Parse date/time
         when_dt = parse_when(content)
         when_line = ""
-        if when_dt is not None:
-         # Format like: Friday, November 21, 2025 at 4:00 PM (ET)
-        when_str = when_dt.strftime("%A, %B %d, %Y at %-I:%M %p")
-        when_line = f"**When:** {when_str} (ET)\n"
 
+        if when_dt is not None:
+            # Format the detected date
+            when_str = when_dt.strftime("%A, %B %d, %Y at %-I:%M %p")
+            when_line = f"**When:** {when_str} (ET)\n"
+
+        # Send session message
         session_message = await study_channel.send(
-        f"📚 **Proposed Study Session**\n"
-        f"**From:** {author.mention}\n"
-        f"**Details (original):** {content}\n"
-        f"{when_line}\n"
-        f"React below to RSVP:\n"
-        f"✅ Going   ❓ Maybe   ❌ Not going"
+            f"📚 **Proposed Study Session**\n"
+            f"**From:** {author.mention}\n"
+            f"**Details (original):** {content}\n"
+            f"{when_line}\n"
+            f"React below to RSVP:\n"
+            f"✅ Going   ❓ Maybe   ❌ Not going"
         )
 
         await session_message.add_reaction("✅")
         await session_message.add_reaction("❓")
         await session_message.add_reaction("❌")
 
+        # Disable buttons
         for child in self.children:
             child.disabled = True
+
         await interaction.message.edit(view=self)
 
     @discord.ui.button(label="No", style=discord.ButtonStyle.danger)
@@ -176,6 +170,7 @@ class ConfirmStudyView(discord.ui.View):
 
         for child in self.children:
             child.disabled = True
+
         await interaction.message.edit(view=self)
 
 
